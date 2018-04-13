@@ -1,0 +1,6 @@
+bin/
+msvc/.vs/*
+msvc/tmp/
+msvc/*.VC.db
+release/*
+*.opendb
