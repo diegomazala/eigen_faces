@@ -1,48 +1,10 @@
+#include "pca_image.h"
 #include <iostream>
-#include <fstream>
-#include <string>
-#include "opencv2/imgcodecs.hpp"
-#include "opencv2/highgui.hpp"
-#include <opencv2/core/core.hpp>
-#include <opencv2/highgui/highgui.hpp>
-
-#include <fstream>
-#include <sstream>
+#include <experimental/filesystem>
+namespace fs = std::experimental::filesystem;
 
 
-static void read_imgList(const std::string& filename, std::vector<cv::Mat>& images) 
-{
-	std::ifstream file(filename.c_str(), std::ifstream::in);
-	if (!file) 
-	{
-		std::string error_message = "No valid input file was given, please check the given filename.";
-		CV_Error(cv::Error::StsBadArg, error_message);
-	}
-	
-	std::string line;
-	while (getline(file, line)) 
-	{
-		images.push_back(cv::imread(line, cv::IMREAD_GRAYSCALE));
-	}
-}
 
-
-static cv::Mat formatImagesForPCA(const std::vector<cv::Mat> &data)
-{
-	auto data_rows = data[0].rows;
-	auto data_cols = data[0].cols;
-	auto data_0_size = data[0].size;
-	auto data_size = data.size();
-
-	cv::Mat dst(static_cast<int>(data.size()), data[0].rows*data[0].cols, CV_32F);
-	for (unsigned int i = 0; i < data.size(); i++)
-	{
-		cv::Mat image_row = data[i].clone().reshape(1, 1);
-		cv::Mat row_i = dst.row(i);
-		image_row.convertTo(row_i, CV_32F);
-	}
-	return dst;
-}
 
 
 static cv::Mat toGrayscale(cv::InputArray _src) 
@@ -87,17 +49,21 @@ static void onTrackbar(int pos, void* ptr)
 	std::cout << "done!   # of principal components: " << p->pca.eigenvectors.rows << std::endl;
 }
 
-// Main
+
+
+
 int main(int argc, char** argv)
 {
-	cv::CommandLineParser parser(argc, argv, "{@input||image list}{help h||show help message}");
+	PcaImage pca_img;
+
+	cv::CommandLineParser parser(argc, argv, "{@input||image list}{@output||pca filename}{help h||show help message}");
 	if (parser.has("help"))
 	{
 		parser.printMessage();
 		exit(0);
 	}
 
-	//// Get the path to your CSV.
+	//// Get the path to file list
 	std::string imgList = parser.get<std::string>("@input");
 	if (imgList.empty())
 	{
@@ -105,13 +71,18 @@ int main(int argc, char** argv)
 		exit(1);
 	}
 
+	std::string outputFilename = parser.get<std::string>("@output");
+	if (outputFilename.empty())
+	{
+		outputFilename = fs::path(imgList).replace_extension(".pca").string();
+	}
+
 
 	// vector to hold the images
-	std::vector<cv::Mat> images;
 	// Read in the data. This can fail if not valid
 	try 
 	{
-		read_imgList(imgList, images);
+		pca_img.loadImages(imgList);
 	}
 	catch (cv::Exception& e) 
 	{
@@ -119,48 +90,55 @@ int main(int argc, char** argv)
 		exit(1);
 	}
 
+	const int num_channels = pca_img.images[0].channels();
+	const int num_rows = pca_img.images[0].rows;
+
 	// Quit if there are not enough images for this demo.
-	if (images.size() <= 1) 
+	if (pca_img.images.size() <= 1)
 	{
 		std::string error_message = "This demo needs at least 2 images to work. Please add more images to your data set!";
 		CV_Error(cv::Error::StsError, error_message);
 	}
 
 	// Reshape and stack images into a rowMatrix
-	cv::Mat data = formatImagesForPCA(images);
-	// perform PCA
-	cv::PCA pca(data, cv::Mat(), cv::PCA::DATA_AS_ROW, 0.95); // trackbar is initially set here, also this is a common value for retainedVariance
-													  // Demonstration of the effect of retainedVariance on the first image
-	cv::Mat point = pca.project(data.row(0)); // project into the eigenspace, thus the image becomes a "point"
-	cv::Mat reconstruction = pca.backProject(point); // re-create the image from the "point"
-	reconstruction = reconstruction.reshape(images[0].channels(), images[0].rows); // reshape from a row vector into image shape
+	pca_img.formatImagesForPCA();
+
+	pca_img.run();
+
+	pca_img.save(outputFilename);
+
+	cv::Mat point = pca_img.pca->project(pca_img.data.row(0)); // project into the eigenspace, thus the image becomes a "point"
+	std::cout << point.rows << ' ' << point.cols << std::endl;
+	cv::Mat reconstruction = pca_img.pca->backProject(point); // re-create the image from the "point"
+	reconstruction = reconstruction.reshape(num_channels, num_rows); // reshape from a row vector into image shape
 	reconstruction = toGrayscale(reconstruction); // re-scale for displaying purposes
 	
-	cv::Mat mean = pca.mean.clone();
-	mean = mean.reshape(images[0].channels(), images[0].rows); // reshape from a row vector into image shape
+	cv::Mat mean = pca_img.pca->mean.clone();
+	mean = mean.reshape(num_channels, num_rows); // reshape from a row vector into image shape
 	mean = toGrayscale(mean); // re-scale for displaying purposes
 	
-	cv::imwrite("../data/heads/heads_pca_mean_cv.jpg", mean);
-	cv::imwrite("../data/heads/heads_pca_mean_rec.jpg", reconstruction);
+	//cv::imwrite("../data/heads/pca_mean.jpg", mean);
 
 	// init highgui window
 	std::string winName = "Reconstruction | press 'q' to quit";
 	cv::namedWindow(winName, cv::WINDOW_NORMAL);
 	// params struct to pass to the trackbar handler
 	params p;
-	p.data = data;
-	p.ch = images[0].channels();
-	p.rows = images[0].rows;
-	p.pca = pca;
+	p.data = pca_img.data;
+	p.ch = pca_img.images[0].channels();
+	p.rows = pca_img.images[0].rows;
+	p.pca = *pca_img.pca;
 	p.winName = winName;
 	
 	// create the tracbar
-	int pos = 95;
+	int pos = 100;
 	cv::createTrackbar("Retained Variance (%)", winName, &pos, 100, onTrackbar, (void*)&p);
 	// display until user presses q
 	imshow(winName, reconstruction);
 	char key = 0;
 	while (key != 'q')
 		key = (char)cv::waitKey();
-	return 0;
+
+
+	return EXIT_FAILURE;
 }

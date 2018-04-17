@@ -13,6 +13,9 @@
   <ItemGroup>
     <ClCompile Include="..\src\pca_opencv.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\src\pca_image.h" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{4C68111D-BFE3-4201-8DF3-A4DB3C411C28}</ProjectGuid>
     <RootNamespace>pca_opencv</RootNamespace>
